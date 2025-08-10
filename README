@@ -1,0 +1,31 @@
+predict IC50 or binding affinity for drug-like molecules against a target 
+
+datasets: 
+- ChEMBL
+- BindingDB
+
+combine moleceular fingerprints with regression models 
+try multitask learning to predict multiple targets simultaneously
+
+Scale up:
+- try graph neural networks
+- try descriptors from mordred
+
+
+generate molecules with desired properties (e.g. high binding affinity, low toxicity) 
+
+use generative models (variational autoencoders, diffusion models, reinforcement learning) 
+train reward functions from qsar or dft-calculated properties 
+
+generation approach:
+- string-based models: RNN or Transformer on SMILES
+- Graph-based models = GNN-based generators (e.g., GraphAF, JT-VAE)
+
+workflow:
+1. pretrain a generative model on large molecule set
+2. define reward = QSAR model score + synthetic accessibility + drug-likeness.
+3. optimize: RL loop: generator --> QSAR --> reward --> policy update
+
+
+TODO:
+- explore bioactivity data for target CHEMBL203 (Epidermal growth factor receptor erbB1) 
