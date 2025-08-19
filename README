@@ -8,9 +8,10 @@ combine moleceular fingerprints with regression models
 try multitask learning to predict multiple targets simultaneously
 
 Scale up:
-- try graph neural networks
+- try graph neural networks (here)
 - try descriptors from mordred
 
+-------------------------------
 
 generate molecules with desired properties (e.g. high binding affinity, low toxicity) 
 

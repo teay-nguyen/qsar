@@ -83,6 +83,8 @@ class NDF:
     out = self.forest(out)
     return out
 
+#    this isn't training properly
+
 if __name__ == '__main__':
   fp = 'data/DOWNLOAD-gU8RPQ5Wut7KaKJdHzr2fUYYJcpIjb0ClUND2cUakNk_eq_.csv'
   df = pd.read_csv(fp, delimiter=';')
