@@ -10,8 +10,13 @@ from torch_geometric.loader import DataLoader
 import torch.nn.functional as F
 import torch.nn as nn
 import torch
+import matplotlib.pyplot as plt
+from tqdm import trange
 
 from sklearn.ensemble import RandomForestRegressor
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f'using device {DEVICE}')
 
 #    TODO: rewrite in tinygrad
 
@@ -82,20 +87,24 @@ class GCN(nn.Module):
     if return_emb: return g
     return self.head(g).squeeze(1)
 
-def set_seed(seed=1667):
+def set_seed(seed=1337):
   rng = np.random.default_rng(seed)
   torch.manual_seed(seed)
   return rng
 
 def export_emb(model, loader):
   model.eval()
-  outs = [model(data, return_emb=True) for data in loader]
-  return torch.cat(outs, dim=0).detach().numpy()
+  outs = []
+  for data in loader:
+    data = data.to(DEVICE, non_blocking=True)
+    outs.append(model(data, return_emb=True).detach().cpu())
+  return torch.cat(outs, dim=0).numpy()
 
 #    NOTE: pretrain the encoder first
 #    TODO: concatenate mordred descriptors with learned embeddings
 
 if __name__ == "__main__":
+  set_seed()
   fp = 'data/DOWNLOAD-gU8RPQ5Wut7KaKJdHzr2fUYYJcpIjb0ClUND2cUakNk_eq_.csv'
   df = pd.read_csv(fp, delimiter=';')
   df = df.dropna(subset=['Smiles', 'pChEMBL Value'])
@@ -107,7 +116,7 @@ if __name__ == "__main__":
     desc_df = calc.pandas(df['mol']) #    concatenate descriptors with GNN learned embeddings
     desc_df.to_pickle('cache/descriptors.pkl')
   else:
-    print('found pickle')
+    print('found pickle: cache/descriptors.pkl')
     desc_df = pd.read_pickle('cache/descriptors.pkl')
 
   graphs = []
@@ -117,20 +126,25 @@ if __name__ == "__main__":
     graphs.append(g)
 
   loader = DataLoader(graphs, batch_size=32, shuffle=True)
-  model = GCN(in_channels=graphs[0].x.shape[1], hidden_channels=128, out_channels=128) #  embedding size = out_channels
+  model = GCN(in_channels=graphs[0].x.shape[1], hidden_channels=128, out_channels=128).to(DEVICE) #  embedding size = out_channels
   opt = torch.optim.Adam(model.parameters())
 
-"""
-  for epoch in range(1,21):
+  accs = []
+  for epoch in (t := trange(1,21)):
     model.train()
     for batch_idx, data in enumerate(loader):
+      data = data.to(DEVICE, non_blocking=True)
       opt.zero_grad()
       out = model(data)
       loss = F.mse_loss(out, data.y.view(-1))
       loss.backward()
       opt.step()
-
-      print(f'loss {loss.item()}')
+      li = loss.item()
+      accs.append(li)
+      t.set_description(f'loss {li:.3f} epoch {epoch}')
 
   E = export_emb(model, loader)
-"""
+  print(f'exported embedding {E.shape}')
+
+  plt.plot(accs)
+  plt.show()
