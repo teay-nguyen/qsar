@@ -10,7 +10,6 @@ from torch_geometric.loader import DataLoader
 import torch.nn.functional as F
 import torch.nn as nn
 import torch
-import matplotlib.pyplot as plt
 from tqdm import trange
 
 from sklearn.ensemble import RandomForestRegressor
@@ -66,8 +65,9 @@ def convert_to_pyg(mol):
     w  += [ww, ww]
 
   edge_index = torch.tensor([src, dst], dtype=torch.long)
-  edge_weight = torch.tensor(w, dtype=torch.float) if w else torch.tensor([], dtype=torch.float)
-  data = Data(x=x, edge_index=edge_index, edge_weight=edge_weight)
+  #edge_weight = torch.tensor(w, dtype=torch.float) if w else torch.tensor([], dtype=torch.float)
+  #data = Data(x=x, edge_index=edge_index, edge_weight=edge_weight)
+  data = Data(x=x, edge_index=edge_index)
   return data
 
 class GCN(nn.Module):
@@ -75,13 +75,17 @@ class GCN(nn.Module):
     super().__init__()
     self.conv1 = GCNConv(in_channels, hidden_channels, normalize=True)
     self.conv2 = GCNConv(hidden_channels, out_channels, normalize=True)
-    self.head = nn.Linear(out_channels, 1)
+    self.dropout = .1
+    self.head = nn.Sequential(
+      nn.Linear(out_channels, out_channels//2), nn.ReLU(),
+      nn.Linear(out_channels//2, 1)
+    )
 
   def forward(self, data, return_emb=False):
     x, edge_index, batch, edge_weight = data.x, data.edge_index, data.batch, data.edge_weight
-    x = F.dropout(x, p=0.5, training=self.training)
+    x = F.dropout(x, p=self.dropout, training=self.training)
     x = self.conv1(x, edge_index, edge_weight).relu()
-    x = F.dropout(x, p=0.5, training=self.training)
+    x = F.dropout(x, p=self.dropout, training=self.training)
     x = self.conv2(x, edge_index, edge_weight)
     g = global_mean_pool(x, batch) #   graph embeddings
     if return_emb: return g
@@ -103,12 +107,24 @@ def export_emb(model, loader):
 #    NOTE: pretrain the encoder first
 #    TODO: concatenate mordred descriptors with learned embeddings
 
+"""
+what works:
+- get rid of edge_weights
+- reduce dropout
+- scale y to standardized y
+- sanity check (this is new to me)
+"""
+
 if __name__ == "__main__":
   set_seed()
   fp = 'data/DOWNLOAD-gU8RPQ5Wut7KaKJdHzr2fUYYJcpIjb0ClUND2cUakNk_eq_.csv'
   df = pd.read_csv(fp, delimiter=';')
   df = df.dropna(subset=['Smiles', 'pChEMBL Value'])
   df['mol'] = df['Smiles'].apply(Chem.MolFromSmiles)
+
+  Y = df['pChEMBL Value'].astype(float).values
+  Y_mean, Y_std = float(np.mean(Y)), float(np.std(Y)+1e-8)
+  df['y_std'] = (Y-Y_mean)/Y_std
 
   os.makedirs('cache', exist_ok=True)
   calc = Calculator(descriptors, ignore_3D=True)
@@ -120,31 +136,38 @@ if __name__ == "__main__":
     desc_df = pd.read_pickle('cache/descriptors.pkl')
 
   graphs = []
-  for mol, target in zip(df['mol'], df['pChEMBL Value']):
+  for mol, target in zip(df['mol'], df['y_std']):
     g = convert_to_pyg(mol)
     g.y = torch.tensor([float(target)], dtype=torch.float)
     graphs.append(g)
 
   loader = DataLoader(graphs, batch_size=32, shuffle=True)
-  model = GCN(in_channels=graphs[0].x.shape[1], hidden_channels=128, out_channels=128).to(DEVICE) #  embedding size = out_channels
-  opt = torch.optim.Adam(model.parameters())
+  sloader = DataLoader(graphs[:32], batch_size=32, shuffle=True)
+  model = GCN(in_channels=graphs[0].x.shape[1], hidden_channels=128, out_channels=128).to(DEVICE) #  embedding size=out_channels
+  opt = torch.optim.AdamW(model.parameters(), lr=3e-3, weight_decay=1e-4)
 
-  accs = []
-  for epoch in (t := trange(1,21)):
+  def train_step(ld):
     model.train()
-    for batch_idx, data in enumerate(loader):
+    running = 0.0
+    for batch_idx,data in enumerate(ld):
       data = data.to(DEVICE, non_blocking=True)
       opt.zero_grad()
       out = model(data)
       loss = F.mse_loss(out, data.y.view(-1))
       loss.backward()
+      nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
       opt.step()
-      li = loss.item()
-      accs.append(li)
-      t.set_description(f'loss {li:.3f} epoch {epoch}')
+      running += loss.item()*data.num_graphs
+    return running/len(ld.dataset)
+
+  for _ in range(50): loss = train_step(sloader)
+  print(f'sanity, small subset loss {loss:.3f}')
+
+  accs = []
+  for epoch in (t:=trange(1,21)):
+    loss = train_step(loader)
+    accs.append(loss)
+    t.set_description(f'loss {loss:.3f} epoch {epoch}')
 
   E = export_emb(model, loader)
   print(f'exported embedding {E.shape}')
-
-  plt.plot(accs)
-  plt.show()
