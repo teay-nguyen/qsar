@@ -12,9 +12,12 @@ import torch.nn as nn
 import torch
 from tqdm import trange
 
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
+
+from tinygrad import Tensor
+import tinygrad.nn
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f'using device {DEVICE}')
@@ -93,6 +96,51 @@ class GCN(nn.Module):
     if return_emb: return g
     return self.head(g).squeeze(1)
 
+
+
+
+
+
+class MLPRegressor:
+  def __init__(self, d_in, d_hidden, d_out=1):
+    self.layers = []
+    last = d_in
+    for h in d_hidden:
+      self.layers.extend([tinygrad.nn.Linear(last,h), Tensor.relu])
+      last = h
+    self.layers.append(tinygrad.nn.Linear(last, d_out))
+
+  def __call__(self, x:Tensor):
+    return x.sequential(self.layers)
+
+"""
+heteroscedastic MLP (predict mean and aleatoric variation)
+- instead of assuming noise in regression is const. (homoscedastic), the model learns input-dependent noise (heteroscedastic)
+- assay variability, dataset curation, outliers
+- aleatoric means uncertainty due to noise in data, not model ignorance
+"""
+
+class MLP:
+  def __init__(self, d_in, d_hidden, min_logvar=-10.0, max_logvar=5.0):
+    self.body = MLPRegressor(d_in, d_hidden, d_out=2)
+    self.min_lv, self.max_lv = min_logvar, max_logvar
+
+  def __call__(self, x:Tensor):
+    out = self.body(x)
+    mu, log_var = out[:,:1], out[:,1:2].clamp(self.min_lv, self.max_lv)
+    return mu, log_var
+
+def train_hetero(model, loader, epochs=100, lr=1e-3):
+  opt = tinygrad.nn.optim.AdamW(tinygrad.nn.state.get_parameters(model), lr=lr)
+  for epoch in (t:=trange(epochs)):
+    pass
+
+
+
+
+
+
+
 def set_seed(seed=1337):
   rng = np.random.default_rng(seed)
   torch.manual_seed(seed)
@@ -106,17 +154,12 @@ def export_emb(model, loader):
     outs.append(model(data, return_emb=True).detach().cpu())
   return torch.cat(outs, dim=0).numpy()
 
-#    TODO: concatenate mordred descriptors with learned embeddings
-
 """
 what works:
 - get rid of edge_weights
 - reduce dropout
 - scale y to standardized y
 - sanity check (this is new to me)
-
-wait. why does this work?
-- mordered computes descriptors for whatever I feed into it
 
 used ChEMBL dataset for CHEMBL203 (Epidermal growth factor receptor erbB1) 
 
@@ -128,8 +171,6 @@ if __name__ == "__main__":
   df = pd.read_csv(fp, delimiter=';')
   df = df.dropna(subset=['Smiles', 'pChEMBL Value'])
   df['mol'] = df['Smiles'].apply(Chem.MolFromSmiles)
-
-  print(df)
 
   Y = df['pChEMBL Value'].astype(float).values
   Y_mean, Y_std = float(np.mean(Y)), float(np.std(Y)+1e-8)
@@ -194,3 +235,11 @@ if __name__ == "__main__":
   E = export_emb(model, loader)
   new_X = np.hstack([E,desc_df])
   new_Y = df['y_std'].to_numpy(dtype=float)
+  X_train, X_test, y_train, y_test = map(lambda x:Tensor(x, dtype='float32'), train_test_split(new_X, new_Y, test_size=.2, random_state=1337))
+
+  def loader(q):
+    while 1:
+      pass
+
+
+  mlp = MLP(X_train.shape[-1], (256, 128))
