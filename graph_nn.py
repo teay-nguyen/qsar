@@ -13,6 +13,8 @@ import torch
 from tqdm import trange
 
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f'using device {DEVICE}')
@@ -104,7 +106,6 @@ def export_emb(model, loader):
     outs.append(model(data, return_emb=True).detach().cpu())
   return torch.cat(outs, dim=0).numpy()
 
-#    NOTE: pretrain the encoder first
 #    TODO: concatenate mordred descriptors with learned embeddings
 
 """
@@ -113,6 +114,14 @@ what works:
 - reduce dropout
 - scale y to standardized y
 - sanity check (this is new to me)
+
+wait. why does this work?
+- why is the shape for mordred descriptors and embeddings a match
+- explore what exactly the dataset contents are
+- explore what the mordred 'descriptors' are
+
+used ChEMBL dataset for CHEMBL203 (Epidermal growth factor receptor erbB1) 
+
 """
 
 if __name__ == "__main__":
@@ -122,18 +131,26 @@ if __name__ == "__main__":
   df = df.dropna(subset=['Smiles', 'pChEMBL Value'])
   df['mol'] = df['Smiles'].apply(Chem.MolFromSmiles)
 
+  print(df)
+
   Y = df['pChEMBL Value'].astype(float).values
   Y_mean, Y_std = float(np.mean(Y)), float(np.std(Y)+1e-8)
   df['y_std'] = (Y-Y_mean)/Y_std
 
   os.makedirs('cache', exist_ok=True)
-  calc = Calculator(descriptors, ignore_3D=True)
+  calc = Calculator(descriptors, ignore_3D=True) #    take 2d descriptors only
   if not os.path.exists('cache/descriptors.pkl'):
+    print('did not find cache/descriptors.pkl, generating descriptors...')
     desc_df = calc.pandas(df['mol']) #    concatenate descriptors with GNN learned embeddings
     desc_df.to_pickle('cache/descriptors.pkl')
   else:
     print('found pickle: cache/descriptors.pkl')
     desc_df = pd.read_pickle('cache/descriptors.pkl')
+
+  imputer = SimpleImputer(strategy="median")
+  scaler = StandardScaler()
+  desc_df = desc_df.apply(pd.to_numeric, errors='coerce')
+  mordred_descriptors = scaler.fit_transform(imputer.fit_transform(desc_df.drop(columns=desc_df.columns[desc_df.isna().all()])))
 
   graphs = []
   for mol, target in zip(df['mol'], df['y_std']):
@@ -143,31 +160,39 @@ if __name__ == "__main__":
 
   loader = DataLoader(graphs, batch_size=32, shuffle=True)
   sloader = DataLoader(graphs[:32], batch_size=32, shuffle=True)
-  model = GCN(in_channels=graphs[0].x.shape[1], hidden_channels=128, out_channels=128).to(DEVICE) #  embedding size=out_channels
+  model = GCN(in_channels=graphs[0].x.shape[1], hidden_channels=128, out_channels=128).to(DEVICE)
   opt = torch.optim.AdamW(model.parameters(), lr=3e-3, weight_decay=1e-4)
+  if not os.path.exists('cache/chkpnt.pth'):
+    def train_step(ld):
+      model.train()
+      running = 0.0
+      for batch_idx,data in enumerate(ld):
+        data = data.to(DEVICE, non_blocking=True)
+        opt.zero_grad()
+        out = model(data)
+        loss = F.mse_loss(out, data.y.view(-1))
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        opt.step()
+        running += loss.item()*data.num_graphs
+      return running/len(ld.dataset)
 
-  def train_step(ld):
-    model.train()
-    running = 0.0
-    for batch_idx,data in enumerate(ld):
-      data = data.to(DEVICE, non_blocking=True)
-      opt.zero_grad()
-      out = model(data)
-      loss = F.mse_loss(out, data.y.view(-1))
-      loss.backward()
-      nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-      opt.step()
-      running += loss.item()*data.num_graphs
-    return running/len(ld.dataset)
+    for _ in range(50): loss = train_step(sloader)
+    print(f'sanity, small subset loss {loss:.3f}')
 
-  for _ in range(50): loss = train_step(sloader)
-  print(f'sanity, small subset loss {loss:.3f}')
+    accs = []
+    for epoch in (t:=trange(1,21)):
+      loss = train_step(loader)
+      accs.append(loss)
+      t.set_description(f'loss {loss:.3f} epoch {epoch}')
 
-  accs = []
-  for epoch in (t:=trange(1,21)):
-    loss = train_step(loader)
-    accs.append(loss)
-    t.set_description(f'loss {loss:.3f} epoch {epoch}')
+    torch.save(model.state_dict(), 'cache/chkpnt.pth')
+    print('saved model to cache/chkpnt.pth')
+  else:
+    print('found checkpoint cache/chkpnt.pth')
+    model.load_state_dict(torch.load('cache/chkpnt.pth'))
+    model.eval()
 
   E = export_emb(model, loader)
-  print(f'exported embedding {E.shape}')
+  new_X = np.hstack([E,desc_df])
+  new_Y = df['y_std'].to_numpy(dtype=float)

@@ -27,6 +27,5 @@ workflow:
 2. define reward = QSAR model score + synthetic accessibility + drug-likeness.
 3. optimize: RL loop: generator --> QSAR --> reward --> policy update
 
-
 TODO:
 - explore bioactivity data for target CHEMBL203 (Epidermal growth factor receptor erbB1) 
