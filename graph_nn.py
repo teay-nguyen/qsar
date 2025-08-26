@@ -116,9 +116,7 @@ what works:
 - sanity check (this is new to me)
 
 wait. why does this work?
-- why is the shape for mordred descriptors and embeddings a match
-- explore what exactly the dataset contents are
-- explore what the mordred 'descriptors' are
+- mordered computes descriptors for whatever I feed into it
 
 used ChEMBL dataset for CHEMBL203 (Epidermal growth factor receptor erbB1) 
 
