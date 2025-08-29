@@ -1,0 +1,10 @@
+heteroscedastic mlp:
+
+allows variance to depend on x. the network learns which are predictable vs uncertain
+in standard regression (mse loss): variance is implicitly assumed to be constant
+
+the first term of nll of a gaussian penalizes predicting huge variances.
+the second term penalizes errors relative to the predict variance
+
+small variance^2 = model is confident
+big variance^2 = data is noisy
