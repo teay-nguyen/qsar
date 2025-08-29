@@ -16,9 +16,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 
-from tinygrad import Tensor
-import tinygrad.nn
-
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f'using device {DEVICE}')
 
@@ -101,17 +98,19 @@ class GCN(nn.Module):
 
 
 
-class MLPRegressor:
-  def __init__(self, d_in, d_hidden, d_out=1):
+class MLPRegressor(nn.Module):
+  def __init__(self, d_in, d_hidden, d_out=1, drop=.1):
+    super().__init__()
     self.layers = []
     last = d_in
     for h in d_hidden:
-      self.layers.extend([tinygrad.nn.Linear(last,h), Tensor.relu])
+      self.layers.extend([nn.Linear(last,h), nn.ReLU(), nn.Dropout(drop)])
       last = h
-    self.layers.append(tinygrad.nn.Linear(last, d_out))
+    self.layers.append(nn.Linear(last, d_out))
+    self.layers = nn.Sequential(*self.layers)
 
-  def __call__(self, x:Tensor):
-    return x.sequential(self.layers)
+  def forward(self, x):
+    return self.layers(x)
 
 """
 heteroscedastic MLP (predict mean and aleatoric variation)
@@ -120,26 +119,37 @@ heteroscedastic MLP (predict mean and aleatoric variation)
 - aleatoric means uncertainty due to noise in data, not model ignorance
 """
 
-class MLP:
-  def __init__(self, d_in, d_hidden, min_logvar=-10.0, max_logvar=5.0):
+class MLP(nn.Module):
+  def __init__(self, d_in, d_hidden, min_logvar=-3.0, max_logvar=5.0):
+    super().__init__()
     self.body = MLPRegressor(d_in, d_hidden, d_out=2)
     self.min_lv, self.max_lv = min_logvar, max_logvar
 
-  def __call__(self, x:Tensor):
+  def forward(self, x):
     out = self.body(x)
     mu, log_var = out[:,:1], out[:,1:2].clamp(self.min_lv, self.max_lv)
     return mu, log_var
 
-def train_hetero(model, loader, epochs=100, lr=1e-3):
-  opt = tinygrad.nn.optim.AdamW(tinygrad.nn.state.get_parameters(model), lr=lr)
+def train_hetero(model, loader, epochs=100, lr=1e-3, wd=1e-4):
+  model.to(DEVICE)
+  model.train()
+  opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
   for epoch in (t:=trange(epochs)):
-    pass
-
-
-
-
-
-
+    running,n = 0,0
+    for data in loader:
+      data = data.to(DEVICE, non_blocking=True)
+      x, y = data.x, data.y.view(-1,1)
+      opt.zero_grad()
+      mu,log_var = model(x)
+      nll = 0.5*(log_var + (y-mu)**2 / torch.exp(log_var)) + (.5*np.log(2*np.pi))
+      loss = nll.mean()
+      loss.backward()
+      nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+      opt.step()
+      bs = y.size(0)
+      running += loss.item() * bs
+      n += bs
+    t.set_description(f'loss {running/max(n,1):.4f} epoch {epoch+1}')
 
 def set_seed(seed=1337):
   rng = np.random.default_rng(seed)
@@ -188,9 +198,8 @@ if __name__ == "__main__":
 
   imputer = SimpleImputer(strategy="median")
   scaler = StandardScaler()
-  desc_df = desc_df.apply(pd.to_numeric, errors='coerce')
+  desc_df = desc_df.apply(pd.to_numeric, errors='coerce').replace([np.inf,-np.inf], np.nan).astype(np.float32)
   mordred_descriptors = scaler.fit_transform(imputer.fit_transform(desc_df.drop(columns=desc_df.columns[desc_df.isna().all()])))
-
   graphs = []
   for mol, target in zip(df['mol'], df['y_std']):
     g = convert_to_pyg(mol)
@@ -233,13 +242,10 @@ if __name__ == "__main__":
     model.eval()
 
   E = export_emb(model, loader)
-  new_X = np.hstack([E,desc_df])
-  new_Y = df['y_std'].to_numpy(dtype=float)
-  X_train, X_test, y_train, y_test = map(lambda x:Tensor(x, dtype='float32'), train_test_split(new_X, new_Y, test_size=.2, random_state=1337))
+  X_stack = np.hstack([E,mordred_descriptors])
+  y = df['y_std'].to_numpy(dtype=float)
 
-  def loader(q):
-    while 1:
-      pass
-
-
-  mlp = MLP(X_train.shape[-1], (256, 128))
+  feats = [Data(x=torch.tensor(x, dtype=torch.float32).unsqueeze(0), y=torch.tensor([target], dtype=torch.float32)) for x,target in zip(X_stack,y)]
+  feat_loader = DataLoader(feats, batch_size=512, shuffle=True)
+  mlp = MLP(X_stack.shape[-1], (256, 128))
+  train_hetero(mlp, feat_loader)
