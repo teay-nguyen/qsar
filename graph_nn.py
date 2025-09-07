@@ -20,6 +20,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f'using device {DEVICE}')
 
 #    TODO: rewrite in tinygrad
+#    TODO: write accuracy testing schemes
 
 """
 
@@ -117,6 +118,9 @@ heteroscedastic MLP (predict mean and aleatoric variation)
 - instead of assuming noise in regression is const. (homoscedastic), the model learns input-dependent noise (heteroscedastic)
 - assay variability, dataset curation, outliers
 - aleatoric means uncertainty due to noise in data, not model ignorance
+
+get predicted mean and predicted log variance, train using the nll gaussian.
+
 """
 
 class MLP(nn.Module):

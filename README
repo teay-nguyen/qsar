@@ -11,8 +11,6 @@ Scale up:
 - try graph neural networks (here)
 - try descriptors from mordred
 
-(done)
-
 -------------------------------
 
 generate molecules with desired properties (e.g. high binding affinity, low toxicity) 
@@ -21,13 +19,57 @@ use generative models (variational autoencoders, diffusion models, reinforcement
 train reward functions from qsar or dft-calculated properties 
 
 generation approach:
-- string-based models: RNN or Transformer on SMILES
+- String-based models: RNN or Transformer on SMILES
 - Graph-based models = GNN-based generators (e.g., GraphAF, JT-VAE)
 
-workflow:
-1. pretrain a generative model on large molecule set
-2. define reward = QSAR model score + synthetic accessibility + drug-likeness.
-3. optimize: RL loop: generator --> QSAR --> reward --> policy update
+1) pretrain good representations
 
-TODO:
-- explore bioactivity data for target CHEMBL203 (Epidermal growth factor receptor erbB1) 
+molecules:
+- Self-supervised GNN (GraphMVP / MolCLR-style): masked-atom + contrastive views (SMILES↔graph↔3D conformer).
+- 3D equivariant encoder: SE(3)/E(3)-equivariant MPNN (e.g., SE(3)-Transformer/MACE)
+  on ETKDG conformers for 3D-aware embeddings
+
+proteins:
+- Pocket encoder (graph of pocket residues or atom cloud) with E(3)-equivariant layers
+  + SES/shape features; optionally diffusion-predicted pocket conformers.
+- Output: robust molecular and pocket embeddings used by generators, predictors, and BO.
+
+2) generators
+Equivariant diffusion for ligand coordinates conditioned on pocket (Pocket2Mol/TargetDiff-style):
+generates atoms, types, bonds, and 3D coordinates consistent with the pocket.
+
+Optional pose-guided refinement using DiffDock-like score or an SE(3) score network.
+
+3) Property models with calibrated uncertainty
+
+Multitask predictors (QSAR/ADMET/tox): D-MPNN or equivariant nets; heteroscedastic heads +
+deep ensembles → aleatoric + epistemic uncertainty.
+
+train a cheap base (e.g., GFN2-xTB/semi-empirical or fast docking) then a Δ-model
+to correct toward expensive labels (DFT B3LYP/def2-TZVP or rigorous docking/MM-GBSA) on a sparse subset.
+
+4) reward & constraints
+define vector objectives per molecule m:
+
+5) two optimizers in tandem
+(i) RL on the generator
+(ii) latent-space bayesian optimization
+RL explores locally with policy gradients; BO performs global, sample-efficient jumps in latent space.
+Keep both running in alternating rounds
+
+6) Physics & structure feedback (for SBDD or higher fidelity)
+Fast stage: DiffDock/GNINA scores + MMFF94 energy checks.
+Mid stage: short OpenMM MD (NVT 100–200 ps) to reject unstable poses; compute simple MM/GBSA.
+High stage (sparse): DFT single-points (Δ-learning targets) on top candidates; periodic re-fit of Δ-model.
+
+7) Synthesis & patentability gate
+Retrosynthesis (ASKCOS/AiZynthFinder/Retro*): route score, steps, building block availability → penalty in R.
+Maintain a memory bank to avoid revisiting failed chemotypes.
+
+8) active training loop
+1. generate batch (RL+BO)
+2. score (predictors → uncertainty; docking/physics).
+3. Select informative Pareto-front compounds for expensive labels (DFT/docking/MD).
+4. update models and uncertainty calibration; iterate.
+
+- target: CHEMBL203 (Epidermal growth factor receptor erbB1)
