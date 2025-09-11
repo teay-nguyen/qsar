@@ -46,7 +46,9 @@ HYB_CHOICES = [
 def atom_features(atom: rdchem.Atom):
   # One-hot hybridization (compact)
     hyb = [int(atom.GetHybridization() == h) for h in HYB_CHOICES]
-    feats = [atom.GetAtomicNum(), atom.GetTotalDegree(), atom.GetFormalCharge(), int(atom.GetIsAromatic()), atom.GetTotalNumHs(includeNeighbors=True), int(atom.HasProp('_ChiralityPossible'))] + hyb
+    feats = [atom.GetAtomicNum(), atom.GetTotalDegree(), atom.GetFormalCharge(),
+             int(atom.GetIsAromatic()), atom.GetTotalNumHs(includeNeighbors=True),
+             int(atom.HasProp('_ChiralityPossible'))] + hyb
     return feats
 
 def bond_order(bond: rdchem.Bond):

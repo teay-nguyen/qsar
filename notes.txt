@@ -8,3 +8,60 @@ the second term penalizes errors relative to the predict variance
 
 small variance^2 = model is confident
 big variance^2 = data is noisy
+
+
+
+objects represented by graphs + semantic constraints
+* how to design generative models for semantically constrained graphs?
+* how to represent the information in semantically constrained graph in model/domain agnostic way
+
+SELFIES: sequence-based representation of semantically constrained graphs
+Chomsky type-2 grammar, augmented with two self-referencing, recursive fxn to ensure generation of valid graphs
+
+SELFIES can serve as direct input into VAEs, GANs
+
+SMILES --> DeepSMILES (robust encoding of rings and branches of molecules) --> GrammarVAE (parse trees to derive SMILES strings)
+
+G(V, Z, R, S) - Grammar - whole decoder
+set V are non-terminal symbols replaced by rules R into terminal symbols Z, given start symbol S
+Z - terminals - tokens: atoms [C], [O], ...
+A_i - rule vector for token i - dispatch table A_ij
+
+accounting for syntactic validity of molecular graphs:
+- augment the context-free grammar with branching functions and ring functions
+- B(N,X_i), the branching function, recursively starts another grammar derivation with subsequent N SELFIES symbols in state X_i
+- after full derivation of new word (graph), B(...) returns the graph and connects it to the current vertex.
+- the ring function R(N) establishes edges between the current vertex and the (N+1)-th last derived vertex
+- 
+
+semantic validity:
+- A_i = ith vector of rules with d_A_i = |V| = r+2
+- basically, interpret a symbol of a SELFIES string, s_i in {0, ..., n+m+p} as an index of a rule vector A_s_i.
+- a rule vector is defined by the symbol of the SELFIES string while the specific rule is chosen by the non-terminal symbol
+
+
+stereo --> bond stereochemistry i.e. orientation info that isn't contained in just the bond order and endpoints
+
+1. Double bond geometry (E/Z, cis/trans)
+* whether higher-priority substituents are on the same size (Z/cis) or opposite (E/trans)
+
+2. Single-bond 'direction' used to express tetrahedral chirality (up/down)
+* tetrahedral chirality is an atom property, but drawings also tag one or more attached single bonds to indicate 3d orientation
+
+
+ring --> a cycle in a molecular graph - path that starts and ends at the same atom without
+         repeated edges e.g. set of atoms bonded in a loop
+
+* graph view: an edge is a ring bond if it lies on at least one cycle
+* chemistry view: rings can be saturated (cyclohexane), aromatic (benzene), fused (naphthalene), spiro or bridged
+
+aromaticity -> a ring is aromatic if:
+1. cyclic (forms a loop)
+2. planar (atoms roughly in one plane so p-orbitals can overlap)
+3. conjugated (every ring atom has a p-orbital; alternating double bonds or lone-pair/empty-p participation)
+4. has 4n+2 pi electrons in the loop
+
+pi system = sideways overlap of p-orbitals above/below the ring
+overlap = same-phase parts of two atomic orbitals occupying the same region of space
+
+NOTE: SMILES uses matching digits to close a ring
